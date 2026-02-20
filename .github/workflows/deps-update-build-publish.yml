@@ -1,16 +1,10 @@
+
 name: Deps update, build, and publish
 
 on:
-  workflow_dispatch:
-    inputs:
-      create_pr:
-        description: "Create a pull request for dependency updates (requires PR_PAT secret)"
-        required: false
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
+  push:
+    branches:
+      - main
   schedule:
     # Every Monday at 06:00 UTC
     - cron: "0 6 * * 1"
@@ -50,7 +44,7 @@ jobs:
       - name: Set image tag (UTC timestamp)
         id: tag
         run: |
-          echo "tag=$(date -u +%Y%m%d-%H%M)" >> "$GITHUB_OUTPUT"
+          echo "tag=$(date -u +%Y%m%d%H%M)" >> "$GITHUB_OUTPUT"
 
       - name: Log image tag
         run: |
@@ -96,16 +90,18 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
+
+      # Only push Docker image if this is a push to main (not schedule)
       - name: Log in to GHCR
-        if: steps.changes.outputs.changed == 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker image (deps update)
-        if: steps.changes.outputs.changed == 'true'
+      - name: Build and push Docker image (main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -114,20 +110,12 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
 
-      - name: Create pull request
-        if: steps.changes.outputs.changed == 'true' && env.PR_PAT != '' && (github.event_name != 'workflow_dispatch' || inputs.create_pr == 'true')
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ env.PR_PAT }}
-          commit-message: "chore(deps): update dependencies"
-          title: "chore(deps): update dependencies"
-          body: |
-            Automated dependency update.
-
-            - Ran `npm-check-updates -u`
-            - Regenerated lockfile via `npm install --include=dev`
-            - Verified reproducible install via `npm ci --include=dev`
-            - Verified with `npm run build`
-            - Pushed Docker image: `${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}`
-          branch: chore/deps-update
-          delete-branch: true
+      # On schedule (Monday), if deps changed and build succeeded, commit directly to main
+      - name: Commit and push dependency updates (schedule only)
+        if: github.event_name == 'schedule' && steps.changes.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore(deps): update dependencies (automated)" || echo "No changes to commit"
+          git push origin main
