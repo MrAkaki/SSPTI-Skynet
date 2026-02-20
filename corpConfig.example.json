@@ -1,0 +1,20 @@
+{
+  "discord": {
+    "channels": {
+      "media": "000000000000000000",
+      "hauling": "000000000000000000",
+      "recruiting": "000000000000000000"
+    },
+    "roles": {
+      "director": "000000000000000000",
+      "recruitingOfficer": "000000000000000000"
+    },
+    "users": {
+      "primaryDirector": "000000000000000000"
+    },
+    "recruiters": {
+      "MrAkaki": "000000000000000000",
+      "Kathrine Natinde": "000000000000000000"
+    }
+  }
+}
