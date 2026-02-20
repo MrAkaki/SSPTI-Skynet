@@ -2,6 +2,15 @@ name: Deps update, build, and publish
 
 on:
   workflow_dispatch:
+    inputs:
+      create_pr:
+        description: "Create a pull request for dependency updates (requires PR_PAT secret)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
   schedule:
     # Every Monday at 06:00 UTC
     - cron: "0 6 * * 1"
@@ -18,6 +27,8 @@ concurrency:
 jobs:
   update_build_publish:
     runs-on: ubuntu-latest
+    env:
+      PR_PAT: ${{ secrets.PR_PAT }}
 
     steps:
       - name: Checkout
@@ -29,14 +40,50 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Set lowercase GHCR image name
+        id: image
+        run: |
+          IMAGE="ghcr.io/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          echo "IMAGE=${IMAGE}" >> "$GITHUB_ENV"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Set image tag (UTC timestamp)
+        id: tag
+        run: |
+          echo "tag=$(date -u +%Y%m%d-%H%M)" >> "$GITHUB_OUTPUT"
+
+      - name: Log image tag
+        run: |
+          echo "Using image tag: ${IMAGE}:${{ steps.tag.outputs.tag }}"
+
       - name: Bump dependencies (package.json)
         run: |
           npx -y npm-check-updates@latest -u
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Detect dependency changes
+        id: depchanges
+        shell: bash
+        run: |
+          if git diff --quiet -- package.json; then
+            echo "deps_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "deps_changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update lockfile (npm install)
+        if: steps.depchanges.outputs.deps_changed == 'true'
+        run: |
+          rm -rf node_modules package-lock.json
+          npm install --include=dev
+
+      - name: Verify clean install (npm ci)
+        if: steps.depchanges.outputs.deps_changed == 'true'
+        run: |
+          rm -rf node_modules
+          npm ci --include=dev
 
       - name: Build (TypeScript)
+        if: steps.depchanges.outputs.deps_changed == 'true'
         run: npm run build
 
       - name: Detect changes
@@ -65,20 +112,22 @@ jobs:
           file: Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:deps-${{ github.run_id }}
+            ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
 
       - name: Create pull request
-        if: steps.changes.outputs.changed == 'true'
+        if: steps.changes.outputs.changed == 'true' && env.PR_PAT != '' && (github.event_name != 'workflow_dispatch' || inputs.create_pr == 'true')
         uses: peter-evans/create-pull-request@v6
         with:
+          token: ${{ env.PR_PAT }}
           commit-message: "chore(deps): update dependencies"
           title: "chore(deps): update dependencies"
           body: |
             Automated dependency update.
 
             - Ran `npm-check-updates -u`
-            - Installed via `npm ci`
+            - Regenerated lockfile via `npm install --include=dev`
+            - Verified reproducible install via `npm ci --include=dev`
             - Verified with `npm run build`
-            - Pushed Docker image: `ghcr.io/${{ github.repository }}:deps-${{ github.run_id }}`
+            - Pushed Docker image: `${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}`
           branch: chore/deps-update
           delete-branch: true

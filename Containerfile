@@ -25,5 +25,6 @@ COPY --from=build /app/dist ./dist
 
 # Ship default knowledge (you can also mount a volume over /app/knowledge)
 COPY knowledge ./knowledge
+COPY prompts ./prompts
 
 CMD ["dist/index.js"]
